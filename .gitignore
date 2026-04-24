@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# secrets & local state
+.env
+.env.local
+tokens.json
+.outlook-cli/
+
+# local-only planning docs (kept on disk for dev, never pushed)
+SUMMARY.md
+PLAN.md
+
+# editors
+.vscode/
+.idea/
+.DS_Store
