@@ -165,6 +165,9 @@ def read(
     console.print()
     if msg.body:
         console.print(msg.body.content or "")
+    if msg.web_link:
+        console.print()
+        console.print(f"[dim]Open in Outlook: {msg.web_link}[/dim]")
 
 
 # ── search ────────────────────────────────────────────────────────────────
@@ -351,6 +354,8 @@ def forward(
         return
 
     err_console.print(f"[green]Draft forward created.[/green] id={draft_msg.id}")
+    if draft_msg.web_link:
+        err_console.print(f"Open in Outlook: {draft_msg.web_link}")
 
 
 # ── move / delete / mark ──────────────────────────────────────────────────
