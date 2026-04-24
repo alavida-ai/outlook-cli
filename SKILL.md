@@ -65,10 +65,12 @@ If any Graph call returns an auth error, run `outlook auth login` and relay the 
 
 ### Mail — read
 
-- `outlook mail list [-n 10] [-f inbox|sentitems|drafts|archive|<name>|<id>] [-u] [--from addr] [--json] [--select fields]`
+- `outlook mail list [-n 10] [-f <folder>] [-u] [--from addr] [--after DATE] [--before DATE] [--focused] [--other] [--json] [--select fields]`
   - `-f inbox` is default. Well-known folders: `inbox`, `sentitems`, `drafts`, `deleteditems`, `junkemail`, `archive`. Or pass a custom folder name or folder id.
   - `-u` shows only unread.
   - `--from someone@domain.com` filters by sender.
+  - `--after 2026-04-01` / `--before 2026-04-15` — date range on `receivedDateTime`.
+  - `--focused` / `--other` — Focused Inbox split (mutually exclusive).
 - `outlook mail read <id> [--text] [--json]`
   - `--text` requests a plain-text body via `Prefer: outlook.body-content-type=text` (default is HTML — noisier for LLMs).
 - `outlook mail search "<kql>" [-n 25] [--json]`
@@ -88,10 +90,21 @@ If any Graph call returns an auth error, run `outlook auth login` and relay the 
 - `outlook mail move <id> <folder>` — well-known name or id.
 - `outlook mail delete <id> [--force]` — moves to Deleted Items.
 - `outlook mail mark <id> [--read|--unread]` — toggle read state.
+- `outlook mail flag <id> [flagged|complete|notFlagged]` — follow-up flag.
+- `outlook mail importance <id> [low|normal|high]` — importance level.
 
-### Calendar, contacts (not yet implemented)
+### Calendar
 
-- `outlook calendar list [--days N]` — stub, returns TODO.
+- `outlook calendar list [-d DAYS] [--after DATE] [--before DATE] [-n LIMIT] [--json] [--select]` — upcoming events via `calendarView` (recurring expanded).
+- `outlook calendar show <id> [--json]` — full event incl. attendees, body, join URL.
+- `outlook calendar create --subject X --start ISO --end ISO [--attendees a@b.com ...] [--location ...] [--body ...] [--all-day] [--online-meeting] [--recurrence daily|weekdays|weekly|monthly|yearly] [--tz IANA] [--json]` — creates event and sends invites. Online-meeting option adds a Teams join link.
+- `outlook calendar update <id> [--subject --start --end --location --body --tz]` — PATCH only the fields you pass.
+- `outlook calendar delete <id> [--force]` — cancels + notifies attendees.
+- `outlook calendar respond <id> [accept|decline|tentative] [--comment "..."] [--send/--no-send]` — reply to an incoming invite.
+- `outlook calendar availability --emails a@b.com [--emails c@d.com] [-d DAYS] [--interval MINUTES] [--tz IANA] [--json]` — free-busy across one or more users. Availability view legend: `0`=free, `1`=tentative, `2`=busy, `3`=OOO, `4`=working-elsewhere.
+
+### Contacts (not yet implemented)
+
 - `outlook contacts list` — stub, returns TODO.
 
 ## Output

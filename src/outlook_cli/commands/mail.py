@@ -86,10 +86,18 @@ def list_(
     folder: Annotated[str, typer.Option("-f", "--folder", help="Folder name (inbox, sentitems, drafts, ...) or id.")] = "inbox",
     unread: Annotated[bool, typer.Option("-u", "--unread", help="Only unread.")] = False,
     from_addr: Annotated[str | None, typer.Option("--from", help="Filter by sender address.")] = None,
+    after: Annotated[str | None, typer.Option("--after", help="Only messages received on/after this date (YYYY-MM-DD or ISO 8601).")] = None,
+    before: Annotated[str | None, typer.Option("--before", help="Only messages received on/before this date (YYYY-MM-DD or ISO 8601).")] = None,
+    focused: Annotated[bool, typer.Option("--focused", help="Only Focused Inbox messages.")] = False,
+    other: Annotated[bool, typer.Option("--other", help="Only Other (non-Focused) messages.")] = False,
     as_json: Annotated[bool, typer.Option("--json", help="JSON envelope.")] = False,
     select: Annotated[str | None, typer.Option("--select", help="Comma-separated field projection.")] = None,
 ):
     """List messages in a folder (default: inbox)."""
+    if focused and other:
+        err_console.print("[red]--focused and --other are mutually exclusive.[/red]")
+        raise typer.Exit(2)
+
     client = graph.get_client(tenant_id(), client_id())
 
     async def _run():
@@ -102,6 +110,14 @@ def list_(
             filters.append("isRead eq false")
         if from_addr:
             filters.append(f"from/emailAddress/address eq '{from_addr}'")
+        if after:
+            filters.append(f"receivedDateTime ge {_normalise_date(after)}")
+        if before:
+            filters.append(f"receivedDateTime le {_normalise_date(before)}")
+        if focused:
+            filters.append("inferenceClassification eq 'focused'")
+        if other:
+            filters.append("inferenceClassification eq 'other'")
         filter_expr = " and ".join(filters) if filters else None
 
         qp = MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters(
@@ -457,6 +473,68 @@ def mark(
     err_console.print(f"[green]Marked {state}[/green] {message_id}")
 
 
+# ── flag / importance ─────────────────────────────────────────────────────
+
+@app.command("flag")
+def flag(
+    message_id: Annotated[str, typer.Argument()],
+    status: Annotated[str, typer.Argument(help="flagged | complete | notFlagged")],
+):
+    """Set the follow-up flag on a message."""
+    mapping = {
+        "flagged": "flagged",
+        "complete": "complete",
+        "notflagged": "notFlagged",
+    }
+    key = status.lower()
+    if key not in mapping:
+        err_console.print("[red]status must be: flagged | complete | notFlagged[/red]")
+        raise typer.Exit(2)
+
+    client = graph.get_client(tenant_id(), client_id())
+
+    async def _run():
+        from msgraph.generated.models.followup_flag import FollowupFlag
+        from msgraph.generated.models.followup_flag_status import FollowupFlagStatus
+        from msgraph.generated.models.message import Message
+
+        status_enum = {
+            "flagged": FollowupFlagStatus.Flagged,
+            "complete": FollowupFlagStatus.Complete,
+            "notflagged": FollowupFlagStatus.NotFlagged,
+        }[key]
+        patch = Message(flag=FollowupFlag(flag_status=status_enum))
+        await client.me.messages.by_message_id(message_id).patch(patch)
+
+    run_graph(_run())
+    err_console.print(f"[green]Flag set {mapping[key]}[/green] on {message_id}")
+
+
+@app.command("importance")
+def importance(
+    message_id: Annotated[str, typer.Argument()],
+    level: Annotated[str, typer.Argument(help="low | normal | high")],
+):
+    """Set the importance level of a message."""
+    key = level.lower()
+    if key not in {"low", "normal", "high"}:
+        err_console.print("[red]level must be: low | normal | high[/red]")
+        raise typer.Exit(2)
+
+    client = graph.get_client(tenant_id(), client_id())
+
+    async def _run():
+        from msgraph.generated.models.importance import Importance
+        from msgraph.generated.models.message import Message
+
+        imp = {"low": Importance.Low, "normal": Importance.Normal, "high": Importance.High}[key]
+        patch = Message(importance=imp)
+        await client.me.messages.by_message_id(message_id).patch(patch)
+
+    run_graph(_run())
+    err_console.print(f"[green]Importance set {key}[/green] on {message_id}")
+
+
 # ── folders ───────────────────────────────────────────────────────────────
 
 @app.command("folders")
@@ -516,6 +594,19 @@ def _resolve_body(body: str | None, body_file: Path | None) -> str:
 def _looks_like_id(s: str) -> bool:
     # Graph folder/message ids are long base64-ish strings. Heuristic: >20 chars, not all lowercase letters.
     return len(s) > 20
+
+
+def _normalise_date(s: str) -> str:
+    """Turn a YYYY-MM-DD or ISO 8601 string into the form Graph's $filter accepts.
+
+    Graph wants ISO-8601 with a Z suffix inside $filter expressions.
+    """
+    s = s.strip()
+    if "T" not in s:
+        s += "T00:00:00"
+    if not s.endswith("Z") and not s.endswith("z"):
+        s += "Z"
+    return s
 
 
 async def _resolve_folder_id(client, display_name: str) -> str:
