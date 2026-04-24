@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from pathlib import Path
 from typing import Annotated, Any
@@ -17,6 +16,7 @@ from outlook_cli.commands._common import (
     err_console,
     parse_select,
     print_json_envelope,
+    run_graph,
     tenant_id,
 )
 
@@ -104,7 +104,7 @@ def list_(
 
         return page.value or []
 
-    messages = asyncio.run(_run())
+    messages = run_graph(_run())
 
     if as_json:
         print_json_envelope([_message_summary(m) for m in messages], fields=parse_select(select))
@@ -148,7 +148,7 @@ def read(
             config.headers.add("Prefer", "outlook.body-content-type=text")
         return await client.me.messages.by_message_id(message_id).get(request_configuration=config)
 
-    msg = asyncio.run(_run())
+    msg = run_graph(_run())
 
     if as_json:
         import json as _json
@@ -195,7 +195,7 @@ def search(
         page = await client.me.messages.get(request_configuration=config)
         return page.value or []
 
-    messages = asyncio.run(_run())
+    messages = run_graph(_run())
 
     if as_json:
         print_json_envelope([_message_summary(m) for m in messages], fields=parse_select(select))
@@ -254,7 +254,7 @@ def draft(
         )
         return await client.me.messages.post(msg)
 
-    created = asyncio.run(_run())
+    created = run_graph(_run())
 
     if as_json:
         import json as _json
@@ -306,7 +306,7 @@ def reply(
         body_req = CreateReplyPostRequestBody(message=reply_msg)
         return await builder.create_reply.post(body_req)
 
-    draft_msg = asyncio.run(_run())
+    draft_msg = run_graph(_run())
 
     if as_json:
         import json as _json
@@ -342,7 +342,7 @@ def forward(
         )
         return await client.me.messages.by_message_id(message_id).create_forward.post(body)
 
-    draft_msg = asyncio.run(_run())
+    draft_msg = run_graph(_run())
 
     if as_json:
         import json as _json
@@ -377,7 +377,7 @@ def move(
         body = MovePostRequestBody(destination_id=dest_id)
         return await client.me.messages.by_message_id(message_id).move.post(body)
 
-    asyncio.run(_run())
+    run_graph(_run())
     err_console.print(f"[green]Moved[/green] {message_id} -> {folder}")
 
 
@@ -394,7 +394,7 @@ def delete(
     async def _run():
         await client.me.messages.by_message_id(message_id).delete()
 
-    asyncio.run(_run())
+    run_graph(_run())
     err_console.print(f"[green]Deleted[/green] {message_id}")
 
 
@@ -411,7 +411,7 @@ def mark(
         patch = Message(is_read=read_flag)
         await client.me.messages.by_message_id(message_id).patch(patch)
 
-    asyncio.run(_run())
+    run_graph(_run())
     state = "read" if read_flag else "unread"
     err_console.print(f"[green]Marked {state}[/green] {message_id}")
 
@@ -429,7 +429,7 @@ def folders(
         page = await client.me.mail_folders.get()
         return page.value or []
 
-    fs = asyncio.run(_run())
+    fs = run_graph(_run())
 
     if as_json:
         print_json_envelope([

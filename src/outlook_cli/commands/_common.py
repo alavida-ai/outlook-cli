@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
-from typing import Any
+from typing import Any, Awaitable, TypeVar
 
 import typer
 from rich.console import Console
@@ -14,6 +15,29 @@ from outlook_cli import auth
 
 console = Console()
 err_console = Console(stderr=True)
+
+T = TypeVar("T")
+
+
+def run_graph(coro: Awaitable[T]) -> T:
+    """Run an async Graph call, translating common errors into clean CLI output.
+
+    Catches the 'not logged in' / 'silent refresh failed' RuntimeError from auth.py
+    and exits 1 with a friendly stderr message instead of dumping a traceback through
+    the Graph SDK's request pipeline.
+    """
+    try:
+        return asyncio.run(coro)
+    except RuntimeError as e:
+        msg = str(e)
+        if "No cached account" in msg or "Silent token refresh failed" in msg:
+            err_console.print(
+                "[yellow]Not logged in.[/yellow] "
+                "Run `outlook auth login` (interactive) or "
+                "`outlook auth login-start --json` (for agent-mediated flow)."
+            )
+            raise typer.Exit(1) from None
+        raise
 
 
 def tenant_id() -> str:

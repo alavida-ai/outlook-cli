@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import sys
 from typing import Annotated
@@ -12,7 +11,7 @@ from dotenv import load_dotenv
 
 from outlook_cli import graph
 from outlook_cli.commands import auth, calendar, contacts, mail
-from outlook_cli.commands._common import client_id, console, tenant_id
+from outlook_cli.commands._common import client_id, console, run_graph, tenant_id
 
 load_dotenv()
 
@@ -37,7 +36,7 @@ def whoami(
     async def _run():
         return await client.me.get()
 
-    me = asyncio.run(_run())
+    me = run_graph(_run())
 
     info = {
         "displayName": me.display_name,
