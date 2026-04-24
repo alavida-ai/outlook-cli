@@ -28,7 +28,7 @@ from keyring.errors import KeyringError
 # Embedded app identity. After running `provision_entra_app.py --multi-tenant`,
 # paste the resulting app_id here. Leave as None to require AZURE_CLIENT_ID env.
 # ─────────────────────────────────────────────────────────────────────────────
-DEFAULT_CLIENT_ID = "18f9e6ff-2b0a-423e-bb35-ab9b541e604e"
+DEFAULT_CLIENT_ID: str | None = "18f9e6ff-2b0a-423e-bb35-ab9b541e604e"
 
 # 'common' works for both personal Microsoft accounts and any work/school tenant.
 # MSAL resolves the actual tenant from the user's sign-in. Multi-tenant Entra apps
