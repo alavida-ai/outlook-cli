@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
+import sys
 import time
 from pathlib import Path
 
@@ -94,11 +94,7 @@ def _build_app(tenant_id: str, client_id: str, cache: msal.SerializableTokenCach
 
 
 def login(tenant_id: str, client_id: str) -> dict:
-    """Run the device-code flow synchronously. Prints the URL + code, then blocks on poll.
-
-    For an agent that wants to forward the login link to a human and come back later,
-    use `start_device_flow` + `complete_device_flow` instead.
-    """
+    """Run the device-code flow. Prints URL + code to stderr, blocks on poll."""
     cache = _load_cache()
     app = _build_app(tenant_id, client_id, cache)
 
@@ -106,91 +102,12 @@ def login(tenant_id: str, client_id: str) -> dict:
     if "user_code" not in flow:
         raise RuntimeError(f"Failed to start device flow: {json.dumps(flow)}")
 
-    print(flow["message"])  # "To sign in, visit https://microsoft.com/devicelogin and enter code XXXX"
+    # stderr + flush: stdout stays clean for machine output; agents reading a
+    # piped subprocess see the URL immediately, not after the 15-min poll ends.
+    print(flow["message"], file=sys.stderr, flush=True)
 
     result = app.acquire_token_by_device_flow(flow)
     _save_cache(cache)
-
-    if "access_token" not in result:
-        raise RuntimeError(f"Auth failed: {result.get('error_description', result)}")
-    return result
-
-
-# ── Two-phase device flow (for agents) ────────────────────────────────────
-
-
-def _flow_dir() -> Path:
-    return Path(tempfile.gettempdir()) / "outlook-cli-flows"
-
-
-def _flow_path(handle: str) -> Path:
-    safe = "".join(c for c in handle if c.isalnum() or c in "-_")
-    return _flow_dir() / f"{safe}.json"
-
-
-def start_device_flow(tenant_id: str, client_id: str) -> dict:
-    """Begin device-code auth and return the code + URL without blocking.
-
-    The returned dict contains:
-        verification_uri — where the user should sign in
-        user_code        — the short code they type there
-        expires_in       — seconds before the code expires (typically 900)
-        handle           — opaque token to pass to `complete_device_flow`
-        message          — human-readable instructions
-
-    The MSAL flow state is persisted to a temp file keyed by `handle` so a later
-    invocation can pick it up (different process / later in the agent's lifecycle).
-    """
-    cache = _load_cache()
-    app = _build_app(tenant_id, client_id, cache)
-
-    flow = app.initiate_device_flow(scopes=SCOPES)
-    if "user_code" not in flow:
-        raise RuntimeError(f"Failed to start device flow: {json.dumps(flow)}")
-
-    handle = flow["device_code"][:16]
-    _flow_dir().mkdir(parents=True, exist_ok=True)
-    path = _flow_path(handle)
-    path.write_text(json.dumps({
-        "flow": flow,
-        "tenant_id": tenant_id,
-        "client_id": client_id,
-    }))
-    path.chmod(0o600)
-
-    return {
-        "verification_uri": flow["verification_uri"],
-        "user_code": flow["user_code"],
-        "expires_in": flow.get("expires_in", 900),
-        "handle": handle,
-        "message": flow["message"],
-    }
-
-
-def complete_device_flow(handle: str) -> dict:
-    """Poll Microsoft until the user completes sign-in. Caches tokens on success.
-
-    Call after `start_device_flow` once the user has been given the URL + code.
-    Blocks for up to `expires_in` seconds (default 15 min).
-    """
-    path = _flow_path(handle)
-    if not path.exists():
-        raise RuntimeError(f"Unknown flow handle: {handle}. Did `start_device_flow` run?")
-
-    state = json.loads(path.read_text())
-    flow = state["flow"]
-    tenant_id = state["tenant_id"]
-    client_id = state["client_id"]
-
-    cache = _load_cache()
-    app = _build_app(tenant_id, client_id, cache)
-    result = app.acquire_token_by_device_flow(flow)
-    _save_cache(cache)
-
-    try:
-        path.unlink()
-    except OSError:
-        pass
 
     if "access_token" not in result:
         raise RuntimeError(f"Auth failed: {result.get('error_description', result)}")

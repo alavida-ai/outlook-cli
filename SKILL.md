@@ -21,33 +21,29 @@ Then `outlook --help`. If you don't have `uv`: `curl -LsSf https://astral.sh/uv/
 
 The CLI uses Microsoft's **device-code flow** — no passwords pass through your machine. The user visits a short URL on any device, enters a 6-character code, signs in with their normal credentials (MFA if enforced).
 
-### Agent-mediated login (the normal path)
-
-When an agent is enrolling a user, split login into two calls so the agent can relay the link:
-
-```bash
-# 1. Start the flow — emits a JSON line with URL + code, exits immediately
-outlook auth login-start --json
-# → {"verification_uri":"https://microsoft.com/devicelogin","user_code":"AB12CD34","handle":"abc123...","expires_in":900,"message":"..."}
-
-# 2. Forward verification_uri + user_code to the user via whatever channel
-#    (Slack, email, SMS). They open the URL, enter the code, sign in.
-
-# 3. Finish — polls Microsoft until the user completes sign-in, caches tokens
-outlook auth login-complete --handle abc123...
-```
-
-The `handle` from step 1 is an opaque token that lets step 3 resume the same flow. Flow state is persisted to `$TMPDIR/outlook-cli-flows/<handle>.json` (0600). Two different processes can own the two calls — step 1 from the agent's dispatch loop, step 3 from a waiter.
-
-### Synchronous login (manual)
-
-If a human is at a terminal:
-
 ```bash
 outlook auth login
-# Prints: "To sign in, visit https://microsoft.com/devicelogin and enter code AB12CD34"
-# Blocks for up to 15 min until the user completes sign-in
+# stderr: "To sign in, visit https://microsoft.com/devicelogin and enter code AB12CD34"
+# Blocks for up to 15 min until the user completes sign-in, then caches tokens.
 ```
+
+### Agent pattern
+
+Spawn `outlook auth login` as a subprocess, read its **stderr** in real time, parse the URL + code, forward to the end user via whatever channel (Slack/email/SMS), wait for the subprocess to exit. Python example:
+
+```python
+proc = subprocess.Popen(
+    ["outlook", "auth", "login"],
+    stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True,
+)
+# stderr prints the URL + code as the first line
+line = proc.stderr.readline()
+# line: "To sign in, use a web browser to open ... and enter the code ABCD1234 ..."
+send_to_user(line)
+proc.wait()   # blocks until the user signs in (or 15 min expires)
+```
+
+Stdout is left clean for future machine-readable output. Stderr is line-buffered so the URL appears immediately on a piped subprocess — no buffering gymnastics needed.
 
 ### Re-auth triggers
 
@@ -57,7 +53,7 @@ Once signed in, tokens silently refresh forever. Re-login is only needed on:
 - 90-day idle
 - Conditional Access re-evaluation events
 
-If any Graph call returns an auth error, run `outlook auth login-start --json` and relay the URL/code again.
+If any Graph call returns an auth error, run `outlook auth login` and relay the new URL/code.
 
 ### Other auth commands
 
@@ -106,7 +102,7 @@ Every command that returns data supports `--json`. List commands use an envelope
 { "results": [...], "count": 10, "nextLink": null }
 ```
 
-Single-item commands (`mail read`, `mail draft`, `mail reply`, `mail forward`, `whoami`, `auth login-start`, `auth login-complete`) emit a bare object.
+Single-item commands (`mail read`, `mail draft`, `mail reply`, `mail forward`, `whoami`) emit a bare object.
 
 `--select field1,field2` projects each result to only those keys — reduces token cost when you only need a subset.
 

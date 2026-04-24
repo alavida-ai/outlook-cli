@@ -32,9 +32,7 @@ def run_graph(coro: Awaitable[T]) -> T:
         msg = str(e)
         if "No cached account" in msg or "Silent token refresh failed" in msg:
             err_console.print(
-                "[yellow]Not logged in.[/yellow] "
-                "Run `outlook auth login` (interactive) or "
-                "`outlook auth login-start --json` (for agent-mediated flow)."
+                "[yellow]Not logged in.[/yellow] Run `outlook auth login` first."
             )
             raise typer.Exit(1) from None
         raise

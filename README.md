@@ -74,18 +74,9 @@ AZURE_TENANT_ID=<their-tenant-id>
 uv run outlook auth login
 ```
 
-Follows the device-code flow — shows a short URL + code, open URL in any browser, sign in, done.
+Follows the device-code flow — prints a short URL + code to stderr, open URL in any browser, sign in, the command unblocks and caches the tokens.
 
-### Agent-mediated login (for when a bot running on the VPS needs to enroll a user)
-
-```bash
-# 1. Start — emits URL + code as JSON, does not block
-uv run outlook auth login-start --json
-# Agent forwards the verification_uri + user_code to the user (Slack/email/etc.)
-
-# 2. Poll until the user signs in
-uv run outlook auth login-complete --handle <handle-from-step-1>
-```
+**For agents:** spawn as a subprocess, read stderr in real time to get the URL + code, forward to the user, wait for the subprocess to exit. Stdout is left clean for machine-readable output; stderr is line-buffered so the URL appears immediately on a pipe. See [SKILL.md](SKILL.md) for a Python example.
 
 ## Quick test
 
