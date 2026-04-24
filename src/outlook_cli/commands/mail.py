@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import parse_qs, quote, urlparse
 
 import typer
 from rich.table import Table
@@ -56,6 +57,25 @@ def _message_full(m: Any) -> dict:
         "importance": m.importance.value if m.importance else None,
     })
     return summary
+
+
+def _compose_link(message: Any) -> str | None:
+    """Build an outlook.cloud.microsoft compose URL for a draft/reply/forward.
+
+    Opens the item directly in edit mode while keeping the full Outlook UI
+    (folder sidebar, ribbon, reading pane context) visible. Unlike the read-mode
+    `webLink` Graph returns for drafts, this saves the user the Edit-pencil click.
+
+    Extracts the URL-encoded ItemID from Graph's webLink — that's the exact
+    form the `/mail/compose/<id>` route accepts.
+    """
+    if not message or not getattr(message, "web_link", None):
+        return None
+    qs = parse_qs(urlparse(message.web_link).query)
+    item_id = qs.get("ItemID", [None])[0]
+    if not item_id:
+        return None
+    return f"https://outlook.cloud.microsoft/mail/compose/{quote(item_id, safe='')}"
 
 
 # ── list ──────────────────────────────────────────────────────────────────
@@ -258,16 +278,22 @@ def draft(
         return await client.me.messages.post(msg)
 
     created = run_graph(_run())
+    edit_link = _compose_link(created)
 
     if as_json:
         import json as _json
-        _json.dump({"id": created.id, "subject": created.subject, "web_link": created.web_link}, sys.stdout)
+        _json.dump({
+            "id": created.id,
+            "subject": created.subject,
+            "web_link": created.web_link,
+            "edit_link": edit_link,
+        }, sys.stdout)
         sys.stdout.write("\n")
         return
 
     err_console.print(f"[green]Draft created.[/green] id={created.id}")
-    if created.web_link:
-        err_console.print(f"Open in Outlook: {created.web_link}")
+    if edit_link:
+        err_console.print(f"Edit in Outlook: {edit_link}")
 
 
 # ── reply / reply-all / forward ───────────────────────────────────────────
@@ -310,16 +336,21 @@ def reply(
         return await builder.create_reply.post(body_req)
 
     draft_msg = run_graph(_run())
+    edit_link = _compose_link(draft_msg)
 
     if as_json:
         import json as _json
-        _json.dump({"id": draft_msg.id, "web_link": draft_msg.web_link}, sys.stdout)
+        _json.dump({
+            "id": draft_msg.id,
+            "web_link": draft_msg.web_link,
+            "edit_link": edit_link,
+        }, sys.stdout)
         sys.stdout.write("\n")
         return
 
     err_console.print(f"[green]Draft reply created.[/green] id={draft_msg.id}")
-    if draft_msg.web_link:
-        err_console.print(f"Open in Outlook: {draft_msg.web_link}")
+    if edit_link:
+        err_console.print(f"Edit in Outlook: {edit_link}")
 
 
 @app.command("forward")
@@ -346,16 +377,21 @@ def forward(
         return await client.me.messages.by_message_id(message_id).create_forward.post(body)
 
     draft_msg = run_graph(_run())
+    edit_link = _compose_link(draft_msg)
 
     if as_json:
         import json as _json
-        _json.dump({"id": draft_msg.id, "web_link": draft_msg.web_link}, sys.stdout)
+        _json.dump({
+            "id": draft_msg.id,
+            "web_link": draft_msg.web_link,
+            "edit_link": edit_link,
+        }, sys.stdout)
         sys.stdout.write("\n")
         return
 
     err_console.print(f"[green]Draft forward created.[/green] id={draft_msg.id}")
-    if draft_msg.web_link:
-        err_console.print(f"Open in Outlook: {draft_msg.web_link}")
+    if edit_link:
+        err_console.print(f"Edit in Outlook: {edit_link}")
 
 
 # ── move / delete / mark ──────────────────────────────────────────────────
