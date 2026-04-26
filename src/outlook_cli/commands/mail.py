@@ -259,15 +259,16 @@ def search(
 def draft(
     to: Annotated[list[str], typer.Option("--to", help="Recipient address (repeat for multiple).")],
     subject: Annotated[str, typer.Option("--subject", help="Email subject.")],
-    body: Annotated[str | None, typer.Option("--body", help="Body text. Use '-' to read from stdin.")] = None,
-    body_file: Annotated[Path | None, typer.Option("--body-file", help="Read body from this file.")] = None,
+    body: Annotated[str | None, typer.Option("--body", help="Body text. Interprets \\n, \\r, \\t, \\\\ like printf. Use '-' to read from stdin.")] = None,
+    body_file: Annotated[Path | None, typer.Option("--body-file", help="Read body from this file (no escape interpretation).")] = None,
     cc: Annotated[list[str] | None, typer.Option("--cc", help="CC address (repeatable).")] = None,
     bcc: Annotated[list[str] | None, typer.Option("--bcc", help="BCC address (repeatable).")] = None,
     html: Annotated[bool, typer.Option("--html", help="Treat body as HTML instead of plain text.")] = False,
+    raw_body: Annotated[bool, typer.Option("--raw-body", help="Disable escape interpretation in --body (pass through verbatim).")] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Emit raw JSON.")] = False,
 ):
     """Create a draft in the Drafts folder. Does not send."""
-    body_text = _resolve_body(body, body_file)
+    body_text = _resolve_body(body, body_file, raw=raw_body)
 
     client = graph.get_client(tenant_id(), client_id())
 
@@ -317,14 +318,15 @@ def draft(
 @app.command("reply")
 def reply(
     message_id: Annotated[str, typer.Argument(help="Message id to reply to.")],
-    body: Annotated[str | None, typer.Option("--body", help="Reply body. Use '-' for stdin.")] = None,
-    body_file: Annotated[Path | None, typer.Option("--body-file", help="Read body from file.")] = None,
+    body: Annotated[str | None, typer.Option("--body", help="Reply body. Interprets \\n, \\r, \\t, \\\\ like printf. Use '-' for stdin.")] = None,
+    body_file: Annotated[Path | None, typer.Option("--body-file", help="Read body from file (no escape interpretation).")] = None,
     reply_all: Annotated[bool, typer.Option("--all", help="Reply to everyone on the thread.")] = False,
     html: Annotated[bool, typer.Option("--html", help="Treat body as HTML.")] = False,
+    raw_body: Annotated[bool, typer.Option("--raw-body", help="Disable escape interpretation in --body.")] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Emit JSON.")] = False,
 ):
     """Create a draft reply (or reply-all). Does not send."""
-    body_text = _resolve_body(body, body_file)
+    body_text = _resolve_body(body, body_file, raw=raw_body)
 
     client = graph.get_client(tenant_id(), client_id())
 
@@ -373,11 +375,16 @@ def reply(
 def forward(
     message_id: Annotated[str, typer.Argument(help="Message id to forward.")],
     to: Annotated[list[str], typer.Option("--to", help="Recipient (repeatable).")],
-    comment: Annotated[str | None, typer.Option("--comment", help="Optional leading note.")] = None,
+    comment: Annotated[str | None, typer.Option("--comment", help="Optional leading note. Interprets \\n, \\r, \\t, \\\\ like printf.")] = None,
+    raw_comment: Annotated[bool, typer.Option("--raw-comment", help="Disable escape interpretation in --comment.")] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Emit JSON.")] = False,
 ):
     """Create a draft forward. Does not send."""
     client = graph.get_client(tenant_id(), client_id())
+
+    decoded_comment = comment
+    if comment and not raw_comment:
+        decoded_comment = _interpret_escapes(comment)
 
     async def _run():
         from msgraph.generated.models.email_address import EmailAddress
@@ -387,7 +394,7 @@ def forward(
         )
 
         body = CreateForwardPostRequestBody(
-            comment=comment or "",
+            comment=decoded_comment or "",
             to_recipients=[Recipient(email_address=EmailAddress(address=a)) for a in to],
         )
         return await client.me.messages.by_message_id(message_id).create_forward.post(body)
@@ -574,14 +581,57 @@ def folders(
 
 # ── helpers ───────────────────────────────────────────────────────────────
 
-def _resolve_body(body: str | None, body_file: Path | None) -> str:
+def _interpret_escapes(s: str) -> str:
+    r"""Interpret backslash escapes in a body string the way printf does.
+
+    Common case we're protecting against: an agent calling
+    `outlook mail draft --body "Hi\n\nfoo"` — the shell does not interpret
+    \n inside double quotes, so we receive the literal 4-char sequence
+    `\n\n` and (without this) email it verbatim. Decode \n, \r, \t, \\ here.
+
+    Real newlines / tabs already in the input pass through unchanged because
+    we only react to a literal backslash followed by one of the escape chars.
+    """
+    out = []
+    i = 0
+    while i < len(s):
+        if s[i] == "\\" and i + 1 < len(s):
+            nxt = s[i + 1]
+            if nxt == "n":
+                out.append("\n")
+                i += 2
+                continue
+            if nxt == "r":
+                out.append("\r")
+                i += 2
+                continue
+            if nxt == "t":
+                out.append("\t")
+                i += 2
+                continue
+            if nxt == "\\":
+                out.append("\\")
+                i += 2
+                continue
+        out.append(s[i])
+        i += 1
+    return "".join(out)
+
+
+def _resolve_body(body: str | None, body_file: Path | None, raw: bool = False) -> str:
+    """Pick the right body source and (unless --raw-body) interpret escape sequences.
+
+    Stdin and file sources are NOT escape-decoded — they're already real text.
+    Only the `--body` arg gets decoded, because that's the path agents
+    accidentally double-encode through.
+    """
     if body is not None and body_file is not None:
         err_console.print("[red]--body and --body-file are mutually exclusive.[/red]")
         raise typer.Exit(2)
     if body == "-":
         return sys.stdin.read()
     if body is not None:
-        return body
+        return body if raw else _interpret_escapes(body)
     if body_file is not None:
         return body_file.read_text()
     # No body provided — read stdin if it's piped.
