@@ -1,8 +1,8 @@
 # Calendar
 
-Events with attendees send invites the moment they're created — there is no calendar-draft mode equivalent to mail drafts. Confirm attendees + timing with the user before running `calendar create --attendees ...`. See safety.md for the confirmation rules.
+Events with attendees send invites the moment they're created — there is no calendar-draft mode equivalent to mail drafts. Confirm attendees + timing with the user before running `calendar create --attendees ...`. See [`./safety.md`](./safety.md) for the confirmation rules.
 
-For passing multi-line `--body` (event description) or `--comment` (response note) — same input mechanics as mail. **See `./body-input.md`** — heredoc/stdin recommended for multi-line content, escape decoding (`\n` → newline) is automatic. Calendar event bodies are plain text only (no HTML rendering, unlike mail).
+For passing multi-line `--body` (event description) or `--comment` (response note) — same input mechanics as mail. **See [`./body-input.md`](./body-input.md)** — heredoc/stdin recommended for multi-line content, escape decoding (`\n` → newline) is automatic. Calendar event bodies are plain text only (no HTML rendering, unlike mail).
 
 ## List
 
