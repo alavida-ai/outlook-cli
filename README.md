@@ -88,35 +88,80 @@ uv run outlook mail list --unread --json | jq '.count'
 
 ## OpenClaw skill
 
-The CLI ships with a bundled OpenClaw skill that teaches the agent when and how to use `outlook ...`. Install it onto disk where OpenClaw scans for skills:
+The CLI ships with a bundled OpenClaw skill that teaches the agent when and how to use `outlook ...`. The skill source is at `skills/outlook/` in this repo: `SKILL.md` (frontmatter + index) plus `references/{auth,mail,calendar,safety}.md`. They're bundled into the wheel via Hatch's `force-include` and shipped with every CLI install.
+
+### Install
 
 ```bash
-outlook skill install                            # default → ~/.openclaw/skills/outlook (managed)
-outlook skill install --workspace ~/wkdir        # → ~/wkdir/skills/outlook (workspace-level, highest precedence)
+outlook skill install                            # default → ~/.openclaw/skills/outlook
+outlook skill install --workspace ~/wkdir        # → ~/wkdir/skills/outlook
 OPENCLAW_WORKSPACE=~/wkdir outlook skill install # same as above, via env var
-outlook skill install --target /custom/path/skills/outlook  # raw path override
+outlook skill install --target /custom/path     # raw path override
 outlook skill install --force                    # overwrite existing
 outlook skill uninstall [--workspace|--target]   # remove (matches install resolution)
 outlook skill path                               # show bundled source path (--bundled, default)
 outlook skill path --installed [--workspace|--target]  # show resolved install path
 ```
 
-OpenClaw skill location precedence (highest first):
-
-| Path | Use this for |
-| --- | --- |
-| `<workspace>/skills/outlook` | Workspace-scoped overrides (highest) — pass `--workspace <path>` |
-| `<workspace>/.agents/skills/outlook` | Project agent skills — pass `--target <workspace>/.agents/skills/outlook` |
-| `~/.agents/skills/outlook` | Personal agent profile — pass `--target ~/.agents/skills/outlook` |
-| `~/.openclaw/skills/outlook` | Shared across all agents on this host (default) |
-
-After install, restart OpenClaw to pick it up:
+After install, restart OpenClaw to pick the skill up:
 ```bash
 openclaw gateway restart
 openclaw skills list             # should now show 'outlook'
 ```
 
-The skill source is at `skills/outlook/` in this repo: `SKILL.md` (frontmatter + index) plus `references/{auth,mail,calendar,safety}.md`. They're bundled into the wheel via Hatch's `force-include` and shipped with every install.
+### Which install path do I want?
+
+OpenClaw scans four locations when loading skills, in **decreasing precedence**:
+
+| # | Path | Scope | When to install here |
+| --- | --- | --- | --- |
+| 1 | `<workspace>/skills/outlook` | One workspace, all agents in it | Override the global skill for a specific project; iterating on skill changes |
+| 2 | `<workspace>/.agents/skills/outlook` | One workspace, agent-namespace | Multi-agent team sharing a workspace; framework-managed skills |
+| 3 | `~/.agents/skills/outlook` | All workspaces, your user | Cross-workspace agent skills tied to your personal profile |
+| 4 | `~/.openclaw/skills/outlook` | All agents on this host | The everyone-gets-it default |
+
+If a skill name appears at multiple levels, the highest-precedence copy wins.
+
+#### Recommended setups
+
+**Single agent on this host, one user (the common case — Amit's POC, dev box):**
+```bash
+outlook skill install         # → ~/.openclaw/skills/outlook  (host-shared, default)
+```
+Every agent on the host can use Outlook. Update with `--upgrade --force`.
+
+**Multi-agent host where every agent should have Outlook (Sun Global with multiple subagents — research, deal-flow, compliance, etc., all of which email):**
+```bash
+outlook skill install         # → ~/.openclaw/skills/outlook  (host-shared, default)
+```
+Same as above. Each agent picks up the skill from the managed location automatically; no per-agent install needed.
+
+**Multi-agent host where only some agents should have Outlook (e.g. only Amit's assistant, not the back-office bots):**
+```bash
+outlook skill install --workspace ~/agents/amit
+# only the agent with workspace=~/agents/amit sees Outlook
+```
+Skip the managed install, use per-workspace installs for the agents that need it.
+
+**Skill-development iteration (you're editing skill content and want to test changes without disturbing the global install):**
+```bash
+outlook skill install --workspace ~/dev/test-workspace
+# then run an agent with workspace=~/dev/test-workspace and your edits override the global skill
+```
+Because workspace-level beats host-shared in precedence, your dev edits win when running in that workspace.
+
+### Updating the skill
+
+Skill content is shipped inside the CLI wheel. To pick up new skill content, upgrade the CLI **then** re-run install with `--force`:
+
+```bash
+uv tool install --upgrade git+https://github.com/alavida-ai/outlook-cli
+outlook skill install --force         # default location
+outlook skill install --workspace ~/wkdir --force   # if you installed per-workspace
+openclaw gateway restart
+```
+
+The CLI binary upgrade alone doesn't re-copy the skill — `outlook skill install --force` does.
 
 ## Roadmap
 

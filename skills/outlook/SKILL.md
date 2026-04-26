@@ -55,17 +55,3 @@ All commands that return data support `--json` for machine-readable output. **St
 When parsing CLI output to chain into the next agent step, only consume **stdout**. Stderr carries human-readable status, prompts, and errors and is not stable for parsing. With `--json`, stdout is a single JSON object or envelope; without `--json`, stdout is a Rich-rendered table or text block.
 
 Lists use an envelope: `{"results": [...], "count": N, "nextLink": "..."}`. Single-item commands emit a bare object.
-
-## Installing / updating
-
-The `outlook` CLI itself:
-```bash
-uv tool install --upgrade git+https://github.com/alavida-ai/outlook-cli
-```
-
-This SKILL.md is bundled with the CLI. To install or upgrade the OpenClaw skill files:
-```bash
-outlook skill install            # copies skill into ~/.openclaw/skills/outlook
-outlook skill install --force    # overwrite an existing install
-openclaw gateway restart         # picks up the new skill
-```
