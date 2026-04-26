@@ -10,7 +10,7 @@ import typer
 from dotenv import load_dotenv
 
 from outlook_cli import graph
-from outlook_cli.commands import auth, calendar, contacts, mail
+from outlook_cli.commands import auth, calendar, contacts, mail, skill
 from outlook_cli.commands._common import client_id, console, run_graph, tenant_id
 
 load_dotenv()
@@ -24,6 +24,7 @@ app.add_typer(auth.app, name="auth")
 app.add_typer(mail.app, name="mail")
 app.add_typer(calendar.app, name="calendar")
 app.add_typer(contacts.app, name="contacts")
+app.add_typer(skill.app, name="skill")
 
 
 @app.command("whoami")

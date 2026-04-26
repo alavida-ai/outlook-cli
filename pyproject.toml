@@ -25,6 +25,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/outlook_cli"]
 
+# Bundle the OpenClaw skill (top-level skills/) into the wheel under outlook_cli/_skills/
+# so `outlook skill install` can find it via importlib.resources at runtime.
+[tool.hatch.build.targets.wheel.force-include]
+"skills" = "outlook_cli/_skills"
+
 [dependency-groups]
 dev = [
     "ruff>=0.8.0",

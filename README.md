@@ -86,6 +86,25 @@ uv run outlook mail list --limit 5
 uv run outlook mail list --unread --json | jq '.count'
 ```
 
+## OpenClaw skill
+
+The CLI ships with a bundled OpenClaw skill that teaches the agent when and how to use `outlook ...`. Install it onto disk where OpenClaw scans for skills:
+
+```bash
+outlook skill install            # → ~/.openclaw/skills/outlook
+outlook skill install --force    # overwrite existing
+outlook skill uninstall          # remove
+outlook skill path               # show bundled source location (read-only)
+```
+
+After install, restart OpenClaw to pick it up:
+```bash
+openclaw gateway restart
+openclaw skills list             # should now show 'outlook'
+```
+
+The skill source is at `skills/outlook/` in this repo: `SKILL.md` (frontmatter + index) plus `references/{auth,mail,calendar,safety}.md`. They're bundled into the wheel via Hatch's `force-include` and shipped with every install.
+
 ## Roadmap
 
 See [PLAN.md](PLAN.md) for the phased plan and [SKILL.md](SKILL.md) for the agent-facing command reference.
