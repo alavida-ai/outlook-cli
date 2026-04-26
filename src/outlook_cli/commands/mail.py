@@ -15,6 +15,7 @@ from outlook_cli.commands._common import (
     client_id,
     console,
     err_console,
+    interpret_escapes,
     parse_select,
     print_json_envelope,
     run_graph,
@@ -384,7 +385,7 @@ def forward(
 
     decoded_comment = comment
     if comment and not raw_comment:
-        decoded_comment = _interpret_escapes(comment)
+        decoded_comment = interpret_escapes(comment)
 
     async def _run():
         from msgraph.generated.models.email_address import EmailAddress
@@ -581,43 +582,6 @@ def folders(
 
 # ── helpers ───────────────────────────────────────────────────────────────
 
-def _interpret_escapes(s: str) -> str:
-    r"""Interpret backslash escapes in a body string the way printf does.
-
-    Common case we're protecting against: an agent calling
-    `outlook mail draft --body "Hi\n\nfoo"` — the shell does not interpret
-    \n inside double quotes, so we receive the literal 4-char sequence
-    `\n\n` and (without this) email it verbatim. Decode \n, \r, \t, \\ here.
-
-    Real newlines / tabs already in the input pass through unchanged because
-    we only react to a literal backslash followed by one of the escape chars.
-    """
-    out = []
-    i = 0
-    while i < len(s):
-        if s[i] == "\\" and i + 1 < len(s):
-            nxt = s[i + 1]
-            if nxt == "n":
-                out.append("\n")
-                i += 2
-                continue
-            if nxt == "r":
-                out.append("\r")
-                i += 2
-                continue
-            if nxt == "t":
-                out.append("\t")
-                i += 2
-                continue
-            if nxt == "\\":
-                out.append("\\")
-                i += 2
-                continue
-        out.append(s[i])
-        i += 1
-    return "".join(out)
-
-
 def _resolve_body(body: str | None, body_file: Path | None, raw: bool = False) -> str:
     """Pick the right body source and (unless --raw-body) interpret escape sequences.
 
@@ -631,7 +595,7 @@ def _resolve_body(body: str | None, body_file: Path | None, raw: bool = False) -
     if body == "-":
         return sys.stdin.read()
     if body is not None:
-        return body if raw else _interpret_escapes(body)
+        return body if raw else interpret_escapes(body)
     if body_file is not None:
         return body_file.read_text()
     # No body provided — read stdin if it's piped.

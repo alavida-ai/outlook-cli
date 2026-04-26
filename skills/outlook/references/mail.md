@@ -69,51 +69,11 @@ Output (human / `--json`) includes:
 
 The `edit_link` is `https://outlook.cloud.microsoft/mail/compose/<id>` — opens the draft directly in compose mode in the user's browser, sidebar visible, no extra clicks. **Always relay this URL to the user** so they can review and send.
 
-### Multi-line bodies — important
+### Multi-line bodies + escape handling
 
-Most real emails have multiple paragraphs. There are four ways to pass them; **pick one of these four**:
+`--body` (and `--comment` on `mail forward`) can take input four different ways: stdin/heredoc, `--body-file`, escape-decoded `--body` string, or HTML.
 
-**(A) stdin (recommended for agents)** — write the body to a heredoc and pipe it. Cleanest, no escape-quoting concerns:
-```bash
-outlook mail draft --to a@b.com --subject "Status update" --body - --json <<'EOF'
-Hi Alice,
-
-Quick update on the deal:
-  - All docs signed
-  - Closing scheduled for Tuesday
-
-Best,
-Agent
-EOF
-```
-
-**(B) `--body-file <path>`** — write the body to a file first, pass the path. Same result as stdin, useful when the body lives in an existing file:
-```bash
-outlook mail draft --to a@b.com --subject "..." --body-file /tmp/email.txt
-```
-
-**(C) `--body` with `\n` escapes** — the CLI decodes `\n`, `\r`, `\t`, `\\` like `printf` does:
-```bash
-outlook mail draft --to a@b.com --subject "Hi" \
-  --body "Hi Alice,\n\nQuick update:\n  - point 1\n  - point 2\n\nBest,\nAgent"
-```
-This is convenient for one-line tool calls but easy to read incorrectly. The four characters `\` + `n` become a real newline. Pass `--raw-body` to disable this decoding if you actually want a literal `\n` to appear in the body.
-
-**(D) `--html` with `<br>` or `<p>` tags** — for properly-formatted HTML email:
-```bash
-outlook mail draft --to a@b.com --subject "Update" --html \
-  --body "<p>Hi Alice,</p><p>Quick update:</p><ul><li>point 1</li><li>point 2</li></ul><p>Best,<br>Agent</p>"
-```
-
-**Anti-pattern — DON'T do this:**
-```bash
-# WRONG: bash double-quotes do NOT interpret \n. Without --body decoding (in older
-# CLI versions), this draft would email the literal string "Line 1\n\nLine 2".
-# Current CLI auto-decodes, but stdin/heredoc is still the most readable choice.
-outlook mail draft --body "Line 1\n\nLine 2"   # works now, but obscures intent
-```
-
-Subjects do NOT get escape-decoding (subjects shouldn't have newlines anyway).
+**See `./body-input.md` for the full guidance and a decision matrix.** TL;DR: prefer stdin/heredoc for multi-line content in agent calls; bash double-quoted `\n` is decoded automatically by the CLI, but stdin is still cleaner.
 
 ### Reply
 

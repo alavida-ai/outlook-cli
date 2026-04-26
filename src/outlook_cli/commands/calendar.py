@@ -15,6 +15,7 @@ from outlook_cli.commands._common import (
     client_id,
     console,
     err_console,
+    interpret_escapes,
     parse_select,
     print_json_envelope,
     run_graph,
@@ -189,7 +190,8 @@ def create(
     end: Annotated[str, typer.Option("--end", help="End ISO 8601.")],
     attendees: Annotated[list[str] | None, typer.Option("--attendees", help="Attendee email (repeatable).")] = None,
     location: Annotated[str | None, typer.Option("--location", help="Location display name.")] = None,
-    body: Annotated[str | None, typer.Option("--body", help="Event body / description.")] = None,
+    body: Annotated[str | None, typer.Option("--body", help="Event body / description. Interprets \\n, \\r, \\t, \\\\ like printf.")] = None,
+    raw_body: Annotated[bool, typer.Option("--raw-body", help="Disable escape interpretation in --body.")] = False,
     all_day: Annotated[bool, typer.Option("--all-day", help="All-day event.")] = False,
     online_meeting: Annotated[bool, typer.Option("--online-meeting", help="Add a Teams meeting link.")] = False,
     recurrence: Annotated[str | None, typer.Option("--recurrence", help="daily | weekdays | weekly | monthly | yearly")] = None,
@@ -197,6 +199,8 @@ def create(
     as_json: Annotated[bool, typer.Option("--json", help="Emit JSON.")] = False,
 ):
     """Create a calendar event. Sends invites to attendees."""
+    if body and not raw_body:
+        body = interpret_escapes(body)
     if recurrence and recurrence not in RECURRENCE_PRESETS:
         err_console.print(
             f"[red]--recurrence must be one of: {', '.join(sorted(RECURRENCE_PRESETS))}[/red]"
@@ -315,10 +319,14 @@ def update(
     start: Annotated[str | None, typer.Option("--start")] = None,
     end: Annotated[str | None, typer.Option("--end")] = None,
     location: Annotated[str | None, typer.Option("--location")] = None,
-    body: Annotated[str | None, typer.Option("--body")] = None,
+    body: Annotated[str | None, typer.Option("--body", help="Event body. Interprets \\n, \\r, \\t, \\\\ like printf.")] = None,
+    raw_body: Annotated[bool, typer.Option("--raw-body", help="Disable escape interpretation in --body.")] = False,
     tz: Annotated[str, typer.Option("--tz")] = "UTC",
 ):
     """Update an existing event. Only the fields you pass get PATCHed."""
+    if body and not raw_body:
+        body = interpret_escapes(body)
+
     client = graph.get_client(tenant_id(), client_id())
 
     async def _run():
@@ -372,13 +380,17 @@ def delete(
 def respond(
     event_id: Annotated[str, typer.Argument()],
     response: Annotated[str, typer.Argument(help="accept | decline | tentative")],
-    comment: Annotated[str | None, typer.Option("--comment", help="Optional note to organizer.")] = None,
+    comment: Annotated[str | None, typer.Option("--comment", help="Optional note to organizer. Interprets \\n, \\r, \\t, \\\\ like printf.")] = None,
+    raw_comment: Annotated[bool, typer.Option("--raw-comment", help="Disable escape interpretation in --comment.")] = False,
     send_response: Annotated[bool, typer.Option("--send/--no-send", help="Notify organizer.")] = True,
 ):
     """Accept, decline, or tentatively accept an incoming meeting invite."""
     if response not in ATTENDEE_RESPONSES:
         err_console.print("[red]response must be: accept | decline | tentative[/red]")
         raise typer.Exit(2)
+
+    if comment and not raw_comment:
+        comment = interpret_escapes(comment)
 
     client = graph.get_client(tenant_id(), client_id())
 

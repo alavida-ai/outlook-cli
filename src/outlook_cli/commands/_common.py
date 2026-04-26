@@ -79,3 +79,43 @@ def parse_select(select: str | None) -> list[str] | None:
     if not select:
         return None
     return [s.strip() for s in select.split(",") if s.strip()]
+
+
+def interpret_escapes(s: str) -> str:
+    r"""Interpret backslash escapes in a free-text arg the way printf does.
+
+    Common case we're protecting against: an agent calls
+        outlook ... --body "Hi\n\nfoo"
+    Bash double-quoting does not interpret backslash escapes, so the CLI
+    receives the literal sequence backslash + n. Without this, that goes
+    straight to Graph and the rendered email/event/comment shows the
+    backslashes verbatim.
+
+    Decodes \\n, \\r, \\t, \\\\ only. Real newlines and tabs already in
+    the input pass through unchanged because we only react to a literal
+    backslash followed by one of those escape characters.
+    """
+    out = []
+    i = 0
+    while i < len(s):
+        if s[i] == "\\" and i + 1 < len(s):
+            nxt = s[i + 1]
+            if nxt == "n":
+                out.append("\n")
+                i += 2
+                continue
+            if nxt == "r":
+                out.append("\r")
+                i += 2
+                continue
+            if nxt == "t":
+                out.append("\t")
+                i += 2
+                continue
+            if nxt == "\\":
+                out.append("\\")
+                i += 2
+                continue
+        out.append(s[i])
+        i += 1
+    return "".join(out)

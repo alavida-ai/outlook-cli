@@ -29,6 +29,7 @@ The CLI has four surfaces. Read the relevant reference file when you need it —
 - **./references/auth.md** — login flow (synchronous device-code; agent reads stderr to relay URL+code to user). When `outlook auth status` exits 1 or any command says "Not logged in", read this.
 - **./references/mail.md** — `outlook mail list | read | search | draft | reply | forward | move | delete | mark | flag | importance | folders`. Includes the `Edit in Outlook` link UX.
 - **./references/calendar.md** — `outlook calendar list | show | create | update | delete | respond | availability`.
+- **./references/body-input.md** — how to pass multi-line `--body` / `--comment` content cleanly (stdin/heredoc, file, escape-decoded string, HTML). Read whenever you're drafting an email or creating a calendar event with multi-line content.
 
 ## Quick reference
 
