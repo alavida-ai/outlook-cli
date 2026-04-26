@@ -91,11 +91,24 @@ uv run outlook mail list --unread --json | jq '.count'
 The CLI ships with a bundled OpenClaw skill that teaches the agent when and how to use `outlook ...`. Install it onto disk where OpenClaw scans for skills:
 
 ```bash
-outlook skill install            # → ~/.openclaw/skills/outlook
-outlook skill install --force    # overwrite existing
-outlook skill uninstall          # remove
-outlook skill path               # show bundled source location (read-only)
+outlook skill install                            # default → ~/.openclaw/skills/outlook (managed)
+outlook skill install --workspace ~/wkdir        # → ~/wkdir/skills/outlook (workspace-level, highest precedence)
+OPENCLAW_WORKSPACE=~/wkdir outlook skill install # same as above, via env var
+outlook skill install --target /custom/path/skills/outlook  # raw path override
+outlook skill install --force                    # overwrite existing
+outlook skill uninstall [--workspace|--target]   # remove (matches install resolution)
+outlook skill path                               # show bundled source path (--bundled, default)
+outlook skill path --installed [--workspace|--target]  # show resolved install path
 ```
+
+OpenClaw skill location precedence (highest first):
+
+| Path | Use this for |
+| --- | --- |
+| `<workspace>/skills/outlook` | Workspace-scoped overrides (highest) — pass `--workspace <path>` |
+| `<workspace>/.agents/skills/outlook` | Project agent skills — pass `--target <workspace>/.agents/skills/outlook` |
+| `~/.agents/skills/outlook` | Personal agent profile — pass `--target ~/.agents/skills/outlook` |
+| `~/.openclaw/skills/outlook` | Shared across all agents on this host (default) |
 
 After install, restart OpenClaw to pick it up:
 ```bash
