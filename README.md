@@ -57,34 +57,62 @@ AZURE_CLIENT_ID=<their-app-id>
 AZURE_TENANT_ID=<their-tenant-id>
 ```
 
-## Setup
+## Install
 
-### First-time (one-off, per outlook-cli install)
+Requires [`uv`](https://docs.astral.sh/uv/) and Python 3.12+. `uv` will fetch a matching Python automatically if you don't have one.
 
-1. `uv sync`
-2. (Only if bootstrapping a new Alavida app — skip if `DEFAULT_CLIENT_ID` already baked in)
-   ```bash
-   uv run python scripts/provision_entra_app.py --tenant alavidai.onmicrosoft.com --multi-tenant
-   ```
-   Paste the printed client id into `src/outlook_cli/auth.py:DEFAULT_CLIENT_ID`.
-
-### Per end user
+Install the CLI as a global tool:
 
 ```bash
-uv run outlook auth login
+uv tool install git+https://github.com/alavida-ai/outlook-cli
+```
+
+This puts an `outlook` binary on your PATH (in `~/.local/bin` by default). If `outlook` isn't found after install, run `uv tool update-shell` and restart your shell.
+
+Upgrade later with:
+
+```bash
+uv tool install --upgrade git+https://github.com/alavida-ai/outlook-cli
+```
+
+Uninstall with `uv tool uninstall outlook-cli`.
+
+### Sign in
+
+```bash
+outlook auth login
 ```
 
 Follows the device-code flow — prints a short URL + code to stderr, open URL in any browser, sign in, the command unblocks and caches the tokens.
 
 **For agents:** spawn as a subprocess, read stderr in real time to get the URL + code, forward to the user, wait for the subprocess to exit. Stdout is left clean for machine-readable output; stderr is line-buffered so the URL appears immediately on a pipe. See [SKILL.md](SKILL.md) for a Python example.
 
-## Quick test
+### Quick test
 
 ```bash
-uv run outlook whoami
-uv run outlook mail list --limit 5
-uv run outlook mail list --unread --json | jq '.count'
+outlook whoami
+outlook mail list --limit 5
+outlook mail list --unread --json | jq '.count'
 ```
+
+## Develop
+
+For working on the CLI itself (instead of just using it):
+
+```bash
+git clone https://github.com/alavida-ai/outlook-cli
+cd outlook-cli
+uv sync
+uv run outlook whoami        # run from the source tree
+```
+
+Bootstrapping a fresh Entra app (only if `DEFAULT_CLIENT_ID` isn't already baked in):
+
+```bash
+uv run python scripts/provision_entra_app.py --tenant alavidai.onmicrosoft.com --multi-tenant
+```
+
+Paste the printed client id into `src/outlook_cli/auth.py:DEFAULT_CLIENT_ID`.
 
 ## OpenClaw skill
 
