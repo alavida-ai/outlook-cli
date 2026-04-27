@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import mimetypes
+import os
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import parse_qs, quote, urlparse
@@ -578,6 +584,438 @@ def folders(
     for f in fs:
         table.add_row(f.display_name, str(f.unread_item_count or 0), str(f.total_item_count or 0), f.id)
     console.print(table)
+
+
+# ── attachments ───────────────────────────────────────────────────────────
+
+# Graph caps inline FileAttachment POSTs at 3MB. Anything larger needs an upload session.
+_INLINE_ATTACHMENT_THRESHOLD = 3 * 1024 * 1024
+# Chunk size for resumable uploads. Must be a multiple of 320 KB per Graph guidance.
+_UPLOAD_CHUNK_SIZE = 10 * 1024 * 1024
+# Hard cap on a single download to prevent runaway memory use.
+_MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
+# Trusted suffixes for the pre-authenticated upload URL Graph returns.
+_TRUSTED_UPLOAD_HOST_SUFFIXES = (".microsoft.com", ".outlook.com", ".office.com", ".office365.com")
+# Ephemeral download root — auto-GC'd on every `attachments` invocation.
+_TMP_ROOT = Path.home() / ".outlook-cli" / "tmp"
+_TMP_TTL_SECONDS = 24 * 60 * 60
+
+_ODATA_KIND = {
+    "#microsoft.graph.fileAttachment": "file",
+    "#microsoft.graph.itemAttachment": "item",
+    "#microsoft.graph.referenceAttachment": "reference",
+}
+
+
+def _attachment_summary(a: Any) -> dict:
+    """Flatten an Attachment (any subclass) into a JSON-friendly dict."""
+    return {
+        "id": a.id,
+        "name": a.name,
+        "contentType": a.content_type,
+        "size": a.size,
+        "isInline": a.is_inline,
+        "kind": _ODATA_KIND.get(a.odata_type or "", a.odata_type or "unknown"),
+    }
+
+
+@app.command("attachments")
+def attachments(
+    message_id: Annotated[str, typer.Argument(help="Message id (from `mail list`).")],
+    save: Annotated[bool, typer.Option("--save", help="Download all FileAttachments to --out.")] = False,
+    attachment_id: Annotated[str | None, typer.Option("--attachment-id", help="Download a specific attachment by id.")] = None,
+    out: Annotated[Path | None, typer.Option("--out", help="Output directory for downloads.")] = None,
+    tmp: Annotated[bool, typer.Option("--tmp", help="Download to ~/.outlook-cli/tmp/<msg-id>/ (auto-cleaned after 24h).")] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="JSON envelope.")] = False,
+):
+    """List, or download (--save / --attachment-id), attachments on a message."""
+    if save and attachment_id:
+        err_console.print("[red]--save and --attachment-id are mutually exclusive.[/red]")
+        raise typer.Exit(2)
+    if tmp and out is not None:
+        err_console.print("[red]--tmp and --out are mutually exclusive.[/red]")
+        raise typer.Exit(2)
+
+    # Garbage-collect stale tmp dirs every time we touch attachments.
+    _gc_tmp_root()
+
+    if tmp:
+        out = _tmp_dir_for_message(message_id)
+    elif out is None:
+        out = Path(".")
+
+    client = graph.get_client(tenant_id(), client_id())
+
+    # Single-attachment download.
+    if attachment_id:
+        async def _run_one():
+            return await client.me.messages.by_message_id(message_id).attachments.by_attachment_id(attachment_id).get()
+
+        att = run_graph(_run_one())
+        saved = _download_one(att, out)
+        if as_json:
+            import json as _json
+            _json.dump({"saved": saved, "name": att.name, "size": att.size}, sys.stdout)
+            sys.stdout.write("\n")
+            return
+        err_console.print(f"[green]Saved[/green] {saved}")
+        return
+
+    if save:
+        # Single async session: list, then re-fetch each FileAttachment for content_bytes.
+        async def _run_bulk():
+            page = await client.me.messages.by_message_id(message_id).attachments.get()
+            listed = page.value or []
+            full_atts: list[Any] = []
+            skipped_local: list[dict] = []
+            for a in listed:
+                kind = _ODATA_KIND.get(a.odata_type or "", "unknown")
+                if kind != "file":
+                    skipped_local.append({"id": a.id, "name": a.name, "kind": kind})
+                    continue
+                full = await client.me.messages.by_message_id(message_id).attachments.by_attachment_id(a.id).get()
+                full_atts.append(full)
+            return full_atts, skipped_local
+
+        full_attachments, skipped = run_graph(_run_bulk())
+
+        _validate_out_dir(out)
+        for s in skipped:
+            err_console.print(f"[yellow]Skipped[/yellow] {s['name'] or s['id']} (kind={s['kind']})")
+
+        saved_paths: list[str] = []
+        for full in full_attachments:
+            saved_paths.append(_download_one(full, out, _skip_validate=True))
+            err_console.print(f"[green]Saved[/green] {saved_paths[-1]}")
+
+        if as_json:
+            import json as _json
+            _json.dump({"saved": saved_paths, "skipped": skipped}, sys.stdout)
+            sys.stdout.write("\n")
+        return
+
+    async def _run_list():
+        page = await client.me.messages.by_message_id(message_id).attachments.get()
+        return page.value or []
+
+    items = run_graph(_run_list())
+
+    # Listing.
+    if as_json:
+        print_json_envelope([_attachment_summary(a) for a in items])
+        return
+
+    if not items:
+        console.print("[dim]No attachments.[/dim]")
+        return
+
+    table = Table(title=f"Attachments on {message_id} ({len(items)})")
+    table.add_column("Name")
+    table.add_column("Type", style="cyan")
+    table.add_column("Size", justify="right")
+    table.add_column("Kind", style="magenta")
+    table.add_column("Inline", justify="center")
+    table.add_column("ID", style="dim")
+    for a in items:
+        kind = _ODATA_KIND.get(a.odata_type or "", "unknown")
+        table.add_row(
+            a.name or "",
+            a.content_type or "",
+            _format_bytes(a.size),
+            kind,
+            "•" if a.is_inline else "",
+            a.id or "",
+        )
+    console.print(table)
+
+
+@app.command("attach")
+def attach(
+    draft_id: Annotated[str, typer.Argument(help="Draft message id (from `mail draft`).")],
+    file: Annotated[Path, typer.Option("--file", help="File to attach.", exists=True, dir_okay=False, readable=True)],
+    name: Annotated[str | None, typer.Option("--name", help="Override the displayed filename.")] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Emit JSON.")] = False,
+):
+    """Attach a file to an existing draft. Refuses anything other than a draft."""
+    file_size = file.stat().st_size
+    display_name = name or file.name
+    content_type = mimetypes.guess_type(str(file))[0] or "application/octet-stream"
+
+    client = graph.get_client(tenant_id(), client_id())
+
+    # All Graph calls happen inside a single async block — kiota's httpx pool is bound
+    # to the first event loop, so multiple run_graph() invocations in one CLI run break.
+    async def _run_graph_part():
+        from msgraph.generated.users.item.messages.item.message_item_request_builder import (
+            MessageItemRequestBuilder,
+        )
+
+        # Verify it's a draft up front — Graph's own error otherwise is opaque.
+        qp = MessageItemRequestBuilder.MessageItemRequestBuilderGetQueryParameters(
+            select=["id", "isDraft"],
+        )
+        config = MessageItemRequestBuilder.MessageItemRequestBuilderGetRequestConfiguration(
+            query_parameters=qp,
+        )
+        msg = await client.me.messages.by_message_id(draft_id).get(request_configuration=config)
+        if not msg.is_draft:
+            return ("not_draft", None)
+
+        if file_size <= _INLINE_ATTACHMENT_THRESHOLD:
+            from msgraph.generated.models.file_attachment import FileAttachment
+
+            fa = FileAttachment(
+                odata_type="#microsoft.graph.fileAttachment",
+                name=display_name,
+                content_type=content_type,
+                content_bytes=file.read_bytes(),
+            )
+            created = await client.me.messages.by_message_id(draft_id).attachments.post(fa)
+            return ("inline", created.id if created else None)
+
+        # Large file — return an upload URL for the sync PUT loop.
+        from msgraph.generated.models.attachment_item import AttachmentItem
+        from msgraph.generated.models.attachment_type import AttachmentType
+        from msgraph.generated.users.item.messages.item.attachments.create_upload_session.create_upload_session_post_request_body import (
+            CreateUploadSessionPostRequestBody,
+        )
+
+        body = CreateUploadSessionPostRequestBody(
+            attachment_item=AttachmentItem(
+                attachment_type=AttachmentType.File,
+                name=display_name,
+                size=file_size,
+                content_type=content_type,
+            ),
+        )
+        session = await client.me.messages.by_message_id(draft_id).attachments.create_upload_session.post(body)
+        if not session or not session.upload_url:
+            return ("session_error", None)
+        return ("upload_url", session.upload_url)
+
+    mode, value = run_graph(_run_graph_part())
+
+    if mode == "not_draft":
+        err_console.print(f"[red]Message {draft_id} is not a draft. Attachments can only be added to drafts.[/red]")
+        raise typer.Exit(2)
+    if mode == "session_error":
+        err_console.print("[red]Upload session created but no upload URL was returned.[/red]")
+        raise typer.Exit(1)
+
+    attachment_id: str | None = None
+    if mode == "inline":
+        attachment_id = value
+    else:  # upload_url
+        _attach_chunked_put(value, file, file_size)
+
+    payload = {
+        "id": attachment_id,
+        "name": display_name,
+        "size": file_size,
+        "contentType": content_type,
+        "draftId": draft_id,
+    }
+    if as_json:
+        import json as _json
+        _json.dump(payload, sys.stdout)
+        sys.stdout.write("\n")
+        return
+
+    err_console.print(
+        f"[green]Attached[/green] {display_name} ({_format_bytes(file_size)}) to draft {draft_id}"
+    )
+
+
+# ── tmp ───────────────────────────────────────────────────────────────────
+
+tmp_app = typer.Typer(help="Manage the ephemeral attachment download cache.", no_args_is_help=True)
+app.add_typer(tmp_app, name="tmp")
+
+
+@tmp_app.command("clean")
+def tmp_clean(
+    all_: Annotated[bool, typer.Option("--all", help="Wipe everything, ignoring the 24h TTL.")] = False,
+):
+    """Remove cached attachment downloads from ~/.outlook-cli/tmp."""
+    if not _TMP_ROOT.exists():
+        err_console.print("[dim]Nothing to clean.[/dim]")
+        return
+
+    import shutil
+
+    removed = 0
+    cutoff = 0 if all_ else _TMP_TTL_SECONDS
+    now = _now()
+    for child in _TMP_ROOT.iterdir():
+        try:
+            age = now - child.stat().st_mtime
+        except OSError:
+            continue
+        if all_ or age > cutoff:
+            shutil.rmtree(child, ignore_errors=True)
+            removed += 1
+    err_console.print(f"[green]Cleaned {removed}[/green] tmp entries from {_TMP_ROOT}")
+
+
+def _tmp_dir_for_message(message_id: str) -> Path:
+    """Return a private tmp dir for a message id, creating it if needed.
+
+    Uses a short hash of the message id so the path stays sane on disk
+    even though Graph message ids are long base64-ish strings.
+    """
+    import hashlib
+
+    # Path.mkdir(parents=True, mode=...) does not apply mode to intermediates,
+    # so create each level explicitly with 0700.
+    _TMP_ROOT.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _TMP_ROOT.mkdir(exist_ok=True, mode=0o700)
+    digest = hashlib.sha256(message_id.encode()).hexdigest()[:16]
+    target = _TMP_ROOT / digest
+    target.mkdir(exist_ok=True, mode=0o700)
+    return target
+
+
+def _gc_tmp_root() -> None:
+    """Opportunistically wipe tmp entries older than _TMP_TTL_SECONDS."""
+    if not _TMP_ROOT.exists():
+        return
+    import shutil
+
+    now = _now()
+    for child in _TMP_ROOT.iterdir():
+        try:
+            age = now - child.stat().st_mtime
+        except OSError:
+            continue
+        if age > _TMP_TTL_SECONDS:
+            shutil.rmtree(child, ignore_errors=True)
+
+
+def _now() -> float:
+    import time
+    return time.time()
+
+
+def _attach_chunked_put(upload_url: str, file: Path, total_size: int) -> None:
+    """PUT a file to a pre-authenticated upload URL in chunks."""
+    _validate_graph_upload_url(upload_url)
+
+    with file.open("rb") as fh:
+        offset = 0
+        while offset < total_size:
+            chunk = fh.read(_UPLOAD_CHUNK_SIZE)
+            if not chunk:
+                break
+            end = offset + len(chunk) - 1
+            req = urllib.request.Request(
+                upload_url,
+                data=chunk,
+                method="PUT",
+                headers={
+                    "Content-Length": str(len(chunk)),
+                    "Content-Range": f"bytes {offset}-{end}/{total_size}",
+                },
+            )
+            try:
+                with urllib.request.urlopen(req) as resp:  # noqa: S310 — URL was allowlist-validated
+                    if resp.status not in (200, 201, 202):
+                        err_console.print(f"[red]Upload chunk failed: HTTP {resp.status}[/red]")
+                        raise typer.Exit(1)
+            except urllib.error.HTTPError as e:
+                err_console.print(f"[red]Upload chunk failed: HTTP {e.code} {e.reason}[/red]")
+                raise typer.Exit(1) from None
+            offset += len(chunk)
+            pct = int(offset / total_size * 100)
+            err_console.print(f"\rUploading... {pct}%", end="")
+        err_console.print()
+
+
+def _download_one(att: Any, out_dir: Path, *, _skip_validate: bool = False) -> str:
+    """Persist a single FileAttachment to disk. Returns the saved path as a string."""
+    kind = _ODATA_KIND.get(att.odata_type or "", "unknown")
+    if kind != "file":
+        err_console.print(f"[red]Cannot download {kind} attachment {att.name or att.id}.[/red]")
+        raise typer.Exit(2)
+    raw = getattr(att, "content_bytes", None)
+    if raw is None:
+        err_console.print(f"[red]Attachment {att.name or att.id} has no content bytes.[/red]")
+        raise typer.Exit(1)
+    # Graph returns FileAttachment.contentBytes as a base64 string. The Python SDK
+    # surfaces it as bytes but does NOT decode — we have to do that ourselves.
+    try:
+        content = base64.b64decode(raw, validate=True)
+    except (binascii.Error, ValueError):
+        # Already-decoded payload (defensive — observed on some SDK versions).
+        content = raw
+    if len(content) > _MAX_DOWNLOAD_BYTES:
+        err_console.print(
+            f"[red]Attachment {att.name or att.id} is {len(content)} bytes, exceeds "
+            f"{_MAX_DOWNLOAD_BYTES} byte download cap.[/red]"
+        )
+        raise typer.Exit(1)
+    if not _skip_validate:
+        _validate_out_dir(out_dir)
+    safe_name = _sanitize_filename(att.name or "attachment")
+    return _safe_write_file(out_dir / safe_name, content)
+
+
+def _validate_out_dir(path: Path) -> None:
+    """Ensure the output directory exists, isn't a symlink, and is private (mode 0700)."""
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    info = path.lstat()
+    if os.path.islink(path):
+        err_console.print(f"[red]Output directory {path} is a symlink, refusing to write.[/red]")
+        raise typer.Exit(2)
+    from stat import S_ISDIR
+    if not S_ISDIR(info.st_mode):
+        err_console.print(f"[red]Output path {path} is not a directory.[/red]")
+        raise typer.Exit(2)
+
+
+def _safe_write_file(path: Path, content: bytes) -> str:
+    """Write content to path, refusing to overwrite. On collision append (1), (2), ... up to 1000."""
+    candidates = [path] + [path.with_name(f"{path.stem}({i}){path.suffix}") for i in range(1, 1000)]
+    for candidate in candidates:
+        try:
+            fd = os.open(str(candidate), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(content)
+        return str(candidate)
+    err_console.print(f"[red]Could not find an available filename near {path} after 1000 attempts.[/red]")
+    raise typer.Exit(1)
+
+
+def _sanitize_filename(name: str) -> str:
+    """Strip path separators, control chars, and leading dots from an attachment-supplied name."""
+    name = os.path.basename(name)
+    name = name.replace(os.sep, "_").replace("/", "_").replace("\\", "_")
+    name = "".join(ch for ch in name if ord(ch) >= 0x20 and ord(ch) != 0x7F)
+    name = name.lstrip(".")
+    return name or "attachment"
+
+
+def _validate_graph_upload_url(raw_url: str) -> None:
+    """Refuse pre-authenticated URLs that aren't HTTPS or aren't on a known Microsoft host."""
+    parsed = urlparse(raw_url)
+    if parsed.scheme != "https":
+        err_console.print(f"[red]Refusing non-HTTPS upload URL ({parsed.scheme}).[/red]")
+        raise typer.Exit(1)
+    host = (parsed.hostname or "").lower()
+    if not any(host.endswith(suffix) for suffix in _TRUSTED_UPLOAD_HOST_SUFFIXES):
+        err_console.print(f"[red]Refusing upload URL on untrusted host {host!r}.[/red]")
+        raise typer.Exit(1)
+
+
+def _format_bytes(n: int | None) -> str:
+    if n is None:
+        return ""
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
+        n /= 1024
+    return f"{n:.1f}GB"
 
 
 # ── helpers ───────────────────────────────────────────────────────────────

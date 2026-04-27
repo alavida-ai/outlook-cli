@@ -93,6 +93,46 @@ outlook mail forward <message-id> --to alex@example.com --comment "FYI"
 outlook mail forward <message-id> --to a@b.com --to c@d.com
 ```
 
+## Attachments
+
+### List, download, attach
+
+```bash
+outlook mail attachments <id>                                      # list
+outlook mail attachments <id> --json                               # list as envelope
+outlook mail attachments <id> --save                               # download all FileAttachments to .
+outlook mail attachments <id> --save --out ./downloads             # download all to a directory
+outlook mail attachments <id> --save --tmp                         # download all to the ephemeral cache
+outlook mail attachments <id> --attachment-id <att-id>             # download one to .
+outlook mail attachments <id> --attachment-id <att-id> --tmp       # download one to the ephemeral cache
+outlook mail attachments <id> --attachment-id <att-id> --out ./dl  # download one to dir
+outlook mail attach <draft-id> --file ./report.pdf                 # attach a file to a draft
+outlook mail attach <draft-id> --file ./big.zip --name "Q1.zip"    # override display name
+outlook mail tmp clean                                             # wipe tmp entries older than 24h
+outlook mail tmp clean --all                                       # wipe everything in tmp
+```
+
+Per-row fields (listing): `id`, `name`, `contentType`, `size`, `isInline`, `kind` (`file` | `item` | `reference`).
+
+Behaviour notes:
+- `mail attach` only works on drafts. Sent or received messages are rejected with exit code 2.
+- Files ≤3MB POST inline. Files >3MB use a resumable upload session with 10MB chunks.
+- Downloads are FileAttachment-only — `item` and `reference` attachments are listed but skipped on `--save` (with a stderr note).
+- Output directory is created with mode `0700` (owner-only). Downloaded files are written with mode `0600`.
+- Filename collisions are resolved by appending ` (1)`, ` (2)`, ... up to 1000 attempts. No silent overwrites.
+- 50MB hard cap on a single download.
+- The `attach` command does not return the new attachment id when the file is large enough to require an upload session — Graph's chunked upload doesn't surface it through the SDK. List the draft's attachments afterwards if you need the id.
+
+### Ephemeral downloads (`--tmp`)
+
+Use `--tmp` for agent workflows where you only need the file for the current task and don't want it cluttering arbitrary directories afterwards.
+
+- Path: `~/.outlook-cli/tmp/<short-hash-of-message-id>/<filename>`
+- Auto-cleaned: every `outlook mail attachments` invocation wipes tmp dirs older than 24 hours. You don't need to remember to clean up.
+- Mutually exclusive with `--out`.
+- To wipe immediately: `outlook mail tmp clean` (24h TTL) or `outlook mail tmp clean --all` (everything).
+- If you decide you want to keep an ephemeral file long-term, just `mv` it out of the tmp tree.
+
 ## Triage
 
 ```bash
